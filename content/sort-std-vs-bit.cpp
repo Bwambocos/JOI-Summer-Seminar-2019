@@ -28,27 +28,7 @@ const LL inf = RAND_MAX;
 
 void solveOnCPU(LL N, LL A[])
 {
-	for (LL block = 2; block <= N; block *= 2)
-	{
-		for (LL step = block / 2; step >= 1; step /= 2)
-		{
-			rep(idx, N)
-			{
-				LL e = idx ^ step;
-				if (e > idx)
-				{
-					LL v1 = A[idx];
-					LL v2 = A[e];
-					if (((idx & block) != 0 && v1 < v2)
-						|| ((idx & block) == 0) && v1 > v2)
-					{
-						A[e] = v1;
-						A[idx] = v2;
-					}
-				}
-			}
-		}
-	}
+	std::sort(A, A + N);
 }
 
 __global__ void solveOnGPU(LL A[], const LL block, const LL step)
@@ -90,23 +70,23 @@ int main()
 		// メモリを確保
 		LL newN = 1;
 		while (newN < N) newN *= 2;
-		size_t nBytes = sizeof(LL) * newN;
+		size_t nBytes = sizeof(LL) * N, newNBytes = sizeof(LL) * newN;
 		LL *h_A, *h_B, *d_B, *cpuRes, *gpuRes;
 		h_A = (LL *)malloc(nBytes);
 		h_B = (LL *)malloc(nBytes);
 		cpuRes = (LL *)malloc(nBytes);
 		gpuRes = (LL *)malloc(nBytes);
-		CHECK(cudaMalloc((LL**)&d_B, nBytes));
+		CHECK(cudaMalloc((LL**)&d_B, newNBytes));
 
 		// 数列を初期化
 		srand((unsigned int)time(0));
-		rep(i, newN) h_A[i] = (i < N ? rand() : inf);
+		rep(i, N) h_A[i] = rand();
 		
 		// CPU 処理時間を計測
 		auto cpuStartTime = cpuSecond();
 		
 			memcpy(h_B, h_A, nBytes);
-			solveOnCPU(newN, h_B);
+			solveOnCPU(N, h_B);
 			memcpy(cpuRes, h_B, nBytes);
 
 		auto cpuEndTime = cpuSecond();
@@ -114,7 +94,11 @@ int main()
 		// GPU 処理時間を計測
 		auto gpuStartTime = cpuSecond();
 		
-			CHECK(cudaMemcpy(d_B, h_A, nBytes, cudaMemcpyHostToDevice));
+			LL *temp;
+			temp = (LL *)malloc(newNBytes);
+			memcpy(temp, h_A, nBytes);
+			for (LL i = N; i < newN; ++i) temp[i] = inf;
+			CHECK(cudaMemcpy(d_B, temp, newNBytes, cudaMemcpyHostToDevice));
 			for (LL block = 2; block <= newN; block *= 2)
 			{
 				for (LL step = block / 2; step >= 1; step /= 2)
@@ -122,16 +106,18 @@ int main()
 					solveOnGPU<<< std::max(newN / maxThreads, 1LL), std::min(newN, maxThreads) >>>(d_B, block, step);
 				}
 			}
-			CHECK(cudaMemcpy(gpuRes, d_B, nBytes, cudaMemcpyDeviceToHost));
+			CHECK(cudaMemcpy(temp, d_B, newNBytes, cudaMemcpyDeviceToHost));
+			memcpy(gpuRes, temp, nBytes);
+			free(temp);
 
 		auto gpuEndTime = cpuSecond();
 
 		// ジャッジ
-		std::sort(h_A, h_A + N);
+		// std::sort(h_A, h_A + N);
 		bool flag = true;
 		rep(i, N)
 		{
-			if (h_A[i] != gpuRes[i])
+			if (cpuRes[i] != gpuRes[i])
 			{
 				flag = false;
 				break;
@@ -140,13 +126,6 @@ int main()
 		out << std::fixed << std::setprecision(7);
 		out << N << "\t" << (cpuEndTime - cpuStartTime) * 1000 << "ms\t" << (gpuEndTime - gpuStartTime) * 1000 << "ms\t" << (flag ? "Accepted\t" : "Wrong Answer\t") << (cpuEndTime - cpuStartTime) / (gpuEndTime - gpuStartTime) << "\t" << ((cpuEndTime - cpuStartTime) / (gpuEndTime - gpuStartTime) > 1. ? "GPU" : "CPU") << std::endl;
 		writing_file << N << "," << (cpuEndTime - cpuStartTime) * 1000 << "," << (gpuEndTime - gpuStartTime) * 1000 << "," << (cpuEndTime - cpuStartTime) / (gpuEndTime - gpuStartTime) << std::endl;
-		if (!flag)
-		{
-			out << "{h_A} : ";
-			rep(i, N) out << h_A[i] << (i + 1 < N ? " " : "\n");
-			out << "{gpuRes} : ";
-			rep(i, N) out << gpuRes[i] << (i + 1 < N ? " " : "\n");
-		}
 
 		// 後始末
 		free(h_A);
